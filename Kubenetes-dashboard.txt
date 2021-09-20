@@ -1,0 +1,204 @@
+==========================================================================================================================================================
+
+	kmaster		: 192.168.56.101
+	kworker 	: 192.168.56.201
+	loadbalancer: 192.168.56.111
+
+1. Create Controller 
+	
+	kubectl create -f https://docs.projectcalico.org/v3.20/manifests/calico.yaml
+
+2. Dashboard:
+
+
+	kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.3.1/aio/deploy/recommended.yaml
+	kubectl -n kubernetes-dashboard get service kubernetes-dashboard
+	kubectl delete service kubernetes-dashboard -n kubernetes-dashboard
+	kubectl expose deployment kubernetes-dashboard --type=LoadBalancer --name=kubernetes-dashboard --external-ip=192.168.56.111 -n kubernetes-dashboard
+	kubectl -n kubernetes-dashboard get service kubernetes-dashboard
+	kubectl -n kubernetes-dashboard get all
+	kubectl -n kubernetes-dashboard get pods -o wide
+	kubectl -n kubernetes-dashboard describe service kubernetes-dashboard
+	
+3. Service and Role:
+
+	#Creating a Service Account
+	cat <<EOF | kubectl apply -f -
+	apiVersion: v1
+	kind: ServiceAccount
+	metadata:
+	  name: admin-user
+	  namespace: kubernetes-dashboard
+	EOF
+
+
+	#Creating a ClusterRoleBinding
+	cat <<EOF | kubectl apply -f -
+	apiVersion: rbac.authorization.k8s.io/v1
+	kind: ClusterRoleBinding
+	metadata:
+	  name: admin-user
+	roleRef:
+	  apiGroup: rbac.authorization.k8s.io
+	  kind: ClusterRole
+	  name: cluster-admin
+	subjects:
+	- kind: ServiceAccount
+	  name: admin-user
+	  namespace: kubernetes-dashboard
+	EOF
+
+4. Check token key:
+
+	kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa/admin-user -o jsonpath="{.secrets[0].name}") -o go-template="{{.data.token | base64decode}}"
+
+5. Add Haproxy:
+
+	cat >/etc/haproxy/haproxy.cfg<<EOF
+	listen stats
+		bind    192.168.56.111:8090
+		mode    http
+		stats   enable
+		stats   hide-version
+		stats   uri       /stats
+		stats   refresh   30s
+		stats   realm     Haproxy\ Statistics
+		stats   auth      admin:admin
+
+	frontend kubernetes-frontend
+		bind 192.168.56.111:6443
+		mode tcp
+		option tcplog
+		default_backend kubernetes-backend
+
+	backend kubernetes-backend
+		mode tcp
+		option tcp-check
+		balance roundrobin
+		server kmaster1 192.168.56.101:6443 check fall 3 rise 2
+		server kmaster2 192.168.56.102:6443 check fall 3 rise 2
+
+	frontend web-kubernetes-frontend
+		bind 192.168.56.111:8443
+		mode tcp
+		option tcplog
+		default_backend web-kubernetes-backend
+
+	backend web-kubernetes-backend
+		mode tcp
+		option tcp-check
+		balance roundrobin
+		server kmaster1 192.168.56.101:30185 check fall 3 rise 2
+		server kmaster2 192.168.56.102:30185 check fall 3 rise 2
+	EOF
+	sudo chmod 644 /etc/haproxy/haproxy.cfg
+	sudo systemctl restart haproxy
+
+5. login :
+	
+   https://192.168.56.111:8443/#/login
+   
+   # kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa/admin-user -o jsonpath="{.secrets[0].name}") -o go-template="{{.data.token | base64decode}}"
+	
+	eyJhbGciOiJSUzI1NiIsImtpZCI6IkRfRkFPeFVCS0ViRWR6MVlBbFZud3BpTGRXVS1KUjBJTDdDSm1rNHZ4dk0ifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlcm5ldGVzLWRhc2hib2FyZCIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhZG1pbi11c2VyLXRva2VuLWpzeGsyIiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9zZXJ2aWNlLWFjY291bnQubmFtZSI6ImFkbWluLXVzZXIiLCJrdWJlcm5ldGVzLmlvL3NlcnZpY2VhY2NvdW50L3NlcnZpY2UtYWNjb3VudC51aWQiOiI0OWI2ZmRkMS1lMjQ5LTQzNjAtYmY3NS1hMWYwYjY1YzVjYmEiLCJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6a3ViZXJuZXRlcy1kYXNoYm9hcmQ6YWRtaW4tdXNlciJ9.SQb-Qr4Q6-6FmTE4TlhI6tLQ6crtL3n1qhPHnudKNX382cap2ZVc2_Gu7Jxc4UTCstxX4id0BD770r0_TSseh-Hg0lCHmXh-zXftkiM5h-ORSKtt2OOUQQYuWADRYo7QWXnibwxyybEtkkEfLSqfazHwxtOiZEdViVyaRknd07oiBSYCt2Q-sX6fHKqUo8zsbrqltf-Izbbs7hyanQGDOIo3g8QAPdiwjGpScfo9qscq-smDVTdHUromMJTSHc_qSJDVmwNdtjUH54NvVgM0vpbGKZ7IqLn3yUBCqkVuDErpM1AHFgATnJcUs8d0JucfJL7IsnaJT-uLfsh6WB66rA
+
+6. Sample service by manual:
+	
+	
+	
+7. Sample service BY yml:   https://karthi-net.medium.com/kubernetes-tutorial-create-deployments-using-yaml-file-90ea901a2f74
+
+	Error : error: unable to recognize "httpd-basic-univers-deployment.yaml": no matches for kind "Deployment" in version "extensions/v1beta1"
+	Solve : https://stackoverflow.com/questions/58481850/no-matches-for-kind-deployment-in-version-extensions-v1beta1
+	
+	# cat httpd-basic-deployment.yaml
+--------------------------------------
+cat > httpd-basic-univers-deployment.yaml<<EOF                                   
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: univers-deployment
+  labels:
+    app: univers
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: univers
+  template:
+    metadata:
+      labels:
+        app: univers
+    spec:
+      containers:
+      - name: univers
+        image: vchantha/univers
+        ports:
+        - containerPort: 80
+EOF
+--------------------------------------
+# kubectl apply -f httpd-basic-univers-deployment.yaml
+
+# kubectl get deploy -A -o wide
+# kubectl expose deployment univers-deployment --name=univers-service --type=LoadBalancer --external-ip=192.168.56.111 -n default
+# kubectl delete service univers-service2
+# kubectl expose deployment univers-deployment --name=univers-service2 --type=NodePort --port=80 --target-port=8081
+# kubectl get services -A -o wide
+
+http://192.168.56.111/
+http://192.168.56.101:8081/
+
+cat >/etc/haproxy/haproxy.cfg<<EOF
+  listen stats
+    bind    192.168.56.111:8090
+    mode    http
+    stats   enable
+    stats   hide-version
+    stats   uri       /stats
+    stats   refresh   30s
+    stats   realm     Haproxy\ Statistics
+    stats   auth      admin:admin
+
+  frontend kubernetes-frontend
+    bind 192.168.56.111:6443
+    mode tcp
+    option tcplog
+    default_backend kubernetes-backend
+
+  backend kubernetes-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    server kmaster1 192.168.56.101:6443 check fall 3 rise 2
+    server kmaster2 192.168.56.102:6443 check fall 3 rise 2
+
+  frontend web-kubernetes-frontend
+    bind 192.168.56.111:8443
+    mode tcp
+    option tcplog
+    default_backend web-kubernetes-backend
+
+  backend web-kubernetes-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    server kmaster1 192.168.56.101:30185 check fall 3 rise 2
+    server kmaster2 192.168.56.102:30185 check fall 3 rise 2
+
+  frontend univers-frontend
+    bind 192.168.56.111:80
+    mode tcp
+    option tcplog
+    default_backend univers-backend
+
+  backend univers-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    server kmaster1 192.168.56.101:31404 check fall 3 rise 2
+EOF
+
+---------------------------------------------------------------------
+$ curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3
+$ chmod 700 get_helm.sh
+$ ./get_helm.sh
